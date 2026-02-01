@@ -1,15 +1,15 @@
-#include <ctype.h>
-#include <fenv.h>
-#include <iso646.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
+#include <immintrin.h>
 
 typedef enum TokenType {
-    TK_INVALID,
+    TK_INVALID, //           INVALID
 
     //LITERALS
     TK_IDENTIFIER, //        x
@@ -83,7 +83,81 @@ typedef enum TokenType {
     TK_SEMICOLON, //         ;
     
     TK_EOF, //               End of file
+    TOKEN_COUNT,
 } TokenType;
+
+typedef enum DFAState {
+    STATE_NONE,
+    STATE_START,
+    STATE_WHITESPACE,
+
+    // IDENTIFIERS AND LITERALS
+    STATE_IDENTIFIER,
+    STATE_INT_LITERAL,
+    STATE_FLOAT_LITERAL,
+    STATE_CHAR_LITERAL,
+    STATE_CHAR_LITERAL_ESCAPE,
+    STATE_CHAR_LITERAL_END,
+    STATE_STRING_LITERAL,
+    STATE_STRING_LITERAL_ESCAPE,
+    STATE_STRING_LITERAL_END,
+
+    // OPERATORS
+    STATE_PLUS,
+    STATE_PLUS_EQUALS,
+    STATE_PLUS_PLUS,
+    STATE_MINUS,
+    STATE_MINUS_EQUALS,
+    STATE_MINUS_MINUS,
+    STATE_MINUS_GREATER,
+    STATE_ASTERISK,
+    STATE_ASTERISK_EQUALS,
+    STATE_SLASH,
+    STATE_SLASH_EQUALS,
+    STATE_AND,
+    STATE_AND_EQUALS,
+    STATE_AND_AND,
+    STATE_OR,
+    STATE_OR_EQUALS,
+    STATE_OR_OR,
+    STATE_EXCLAMATION_MARK,
+    STATE_EXCLAMATION_MARK_EQUALS,
+    STATE_TILDE,
+    STATE_HAT,
+    STATE_HAT_EQUALS,
+    STATE_PERCENT,
+    STATE_PERCENT_EQUALS,
+    STATE_EQUALS,
+    STATE_EQUALS_EQUALS,
+    STATE_LESSER,
+    STATE_GREATER,
+    STATE_LESSER_EQUALS,
+    STATE_GREATER_EQUALS,
+    STATE_SHIFT_LEFT,
+    STATE_SHIFT_RIGHT,
+    STATE_SHIFT_LEFT_EQUALS,
+    STATE_SHIFT_RIGHT_EQUALS,
+    STATE_DOT,
+    STATE_QUESTION_MARK,
+    STATE_COLON,
+
+    // COMMENTS
+    STATE_LINE_COMMENT,
+    STATE_BLOCK_COMMENT,
+    STATE_BLOCK_COMMENT_ASTERISK,
+
+    // PUNCTUATORS
+    STATE_COMMA,
+    STATE_OPEN_PARENTHESIS,
+    STATE_CLOSE_PARENTHESIS,
+    STATE_OPEN_BRACKET,
+    STATE_CLOSE_BRACKET,
+    STATE_OPEN_BRACE,
+    STATE_CLOSE_BRACE,
+    STATE_SEMICOLON,
+    
+    STATE_COUNT,
+} DFAState;
 
 typedef struct Token {
     uint64_t line;
@@ -121,481 +195,364 @@ char* OpenFile(const char* path, uint64_t* size) {
     return data;
 }
 
-static inline Token CreateKeywordToken(char* input, uint64_t inputLength) {
-    Token token = {
-        .type = TK_IDENTIFIER,
-        .literal = input,
-        .literalLength = inputLength,
-    };
+static inline TokenType GetKeyword(char* input, uint64_t inputLength) {
+    TokenType tokenType = TK_IDENTIFIER;
 
     switch (inputLength) {
         case 2: {
-            if (input[0] == 'i' && input[1] == 'f') token.type = TK_KW_IF;
+            if (input[0] == 'i' && input[1] == 'f') tokenType = TK_KW_IF;
 
             break;
         }
         case 3: {
-            if (input[0] == 'm' && input[1] == 'u' && input[2] == 't') token.type = TK_KW_MUT;
-            else if (input[0] == 'f' && input[1] == 'o' && input[2] == 'r') token.type = TK_KW_FOR;
+            if (input[0] == 'm' && input[1] == 'u' && input[2] == 't') tokenType = TK_KW_MUT;
+            else if (input[0] == 'f' && input[1] == 'o' && input[2] == 'r') tokenType = TK_KW_FOR;
 
             break;
         }
         case 4: {
             if (input[0] == 'e') {
-                if (input[1] == 'l' && input[2] == 's' && input[3] == 'e') token.type = TK_KW_ELSE;
-                else if (input[1] == 'm' && input[2] == 'i' && input[3] == 't') token.type = TK_KW_EMIT;
-                else if (input[1] == 'n' && input[2] == 'u' && input[3] == 'm') token.type = TK_KW_ENUM;
+                if (input[1] == 'l' && input[2] == 's' && input[3] == 'e') tokenType = TK_KW_ELSE;
+                else if (input[1] == 'm' && input[2] == 'i' && input[3] == 't') tokenType = TK_KW_EMIT;
+                else if (input[1] == 'n' && input[2] == 'u' && input[3] == 'm') tokenType = TK_KW_ENUM;
             }
 
             break;
         }
         case 5: {
-            if (input[0] == 'w' && input[1] == 'h' && input[2] == 'i' && input[3] == 'l' && input[4] == 'e') token.type = TK_KW_WHILE;
-            else if (input[0] == 'b' && input[1] == 'r' && input[2] == 'e' && input[3] == 'a' && input[4] == 'k') token.type = TK_KW_BREAK;
-            else if (input[0] == 'u' && input[1] == 'n' && input[2] == 'i' && input[3] == 'o' && input[4] == 'n') token.type = TK_KW_UNION;
+            if (input[0] == 'w' && input[1] == 'h' && input[2] == 'i' && input[3] == 'l' && input[4] == 'e') tokenType = TK_KW_WHILE;
+            else if (input[0] == 'b' && input[1] == 'r' && input[2] == 'e' && input[3] == 'a' && input[4] == 'k') tokenType = TK_KW_BREAK;
+            else if (input[0] == 'u' && input[1] == 'n' && input[2] == 'i' && input[3] == 'o' && input[4] == 'n') tokenType = TK_KW_UNION;
 
             break;
         }
         case 6: {
-            if (input[0] == 'r' && input[1] == 'e' && input[2] == 't' && input[3] == 'u' && input[4] == 'r' && input[5] == 'n') token.type = TK_KW_RETURN;
-            else if (input[0] == 's' && input[1] == 't' && input[2] == 'r' && input[3] == 'u' && input[4] == 'c' && input[5] == 't') token.type = TK_KW_STRUCT;
+            if (input[0] == 'r' && input[1] == 'e' && input[2] == 't' && input[3] == 'u' && input[4] == 'r' && input[5] == 'n') tokenType = TK_KW_RETURN;
+            else if (input[0] == 's' && input[1] == 't' && input[2] == 'r' && input[3] == 'u' && input[4] == 'c' && input[5] == 't') tokenType = TK_KW_STRUCT;
 
             break;
         }
         case 8: {
-            if (input[0] == 'c' && input[1] == 'o' && input[2] == 'm' && input[3] == 'p' && input[4] == 't' && input[5] == 'i' && input[6] == 'm' && input[7] == 'e') token.type = TK_KW_COMPTIME;
-            else if (input[0] == 'c' && input[1] == 'o' && input[2] == 'n' && input[3] == 't' && input[4] == 'i' && input[5] == 'n' && input[6] == 'u' && input[7] == 'e') token.type = TK_KW_CONTINUE;
+            if (input[0] == 'c' && input[1] == 'o' && input[2] == 'm' && input[3] == 'p' && input[4] == 't' && input[5] == 'i' && input[6] == 'm' && input[7] == 'e') tokenType = TK_KW_COMPTIME;
+            else if (input[0] == 'c' && input[1] == 'o' && input[2] == 'n' && input[3] == 't' && input[4] == 'i' && input[5] == 'n' && input[6] == 'u' && input[7] == 'e') tokenType = TK_KW_CONTINUE;
 
             break;
         }
     }
 
-    return token;
+    return tokenType;
 }
 
-static inline Token CreateOperatorToken(char* input, uint64_t size, uint64_t* i) {
-    uint64_t pos = *i;
+static const TokenType DFAStateToTokenTypeLookup[STATE_COUNT] = {
+    [STATE_NONE]                    = TK_INVALID,
+    [STATE_START]                   = TK_INVALID,
+    [STATE_WHITESPACE]              = TK_INVALID,
+    [STATE_IDENTIFIER]              = TK_IDENTIFIER,
+    [STATE_INT_LITERAL]             = TK_INT_LITERAL,
+    [STATE_FLOAT_LITERAL]           = TK_FLOAT_LITERAL,
+    [STATE_CHAR_LITERAL]            = TK_INVALID,
+    [STATE_CHAR_LITERAL_ESCAPE]     = TK_INVALID,
+    [STATE_CHAR_LITERAL_END]        = TK_CHAR_LITERAL,
+    [STATE_STRING_LITERAL]          = TK_INVALID,
+    [STATE_STRING_LITERAL_ESCAPE]   = TK_INVALID,
+    [STATE_STRING_LITERAL_END]      = TK_STRING_LITERAL,
+    [STATE_PLUS]                    = TK_PLUS,
+    [STATE_PLUS_EQUALS]             = TK_PLUS_EQUAL,
+    [STATE_PLUS_PLUS]               = TK_INCREMENT,
+    [STATE_MINUS]                   = TK_MINUS,
+    [STATE_MINUS_EQUALS]            = TK_MINUS_EQUAL,
+    [STATE_MINUS_MINUS]             = TK_DECREMENT,
+    [STATE_MINUS_GREATER]           = TK_ARROW,
+    [STATE_ASTERISK]                = TK_ASTERISK,
+    [STATE_ASTERISK_EQUALS]         = TK_MULT_EQUAL,
+    [STATE_SLASH]                   = TK_SLASH,
+    [STATE_SLASH_EQUALS]            = TK_DIVIDE_EQUAL,
+    [STATE_AND]                     = TK_BITWISE_AND,
+    [STATE_AND_EQUALS]              = TK_BITWISE_AND_EQUAL,
+    [STATE_AND_AND]                 = TK_LOGICAL_AND,
+    [STATE_OR]                      = TK_BITWISE_OR,
+    [STATE_OR_EQUALS]               = TK_BITWISE_OR_EQUAL,
+    [STATE_OR_OR]                   = TK_LOGICAL_OR,
+    [STATE_EXCLAMATION_MARK]        = TK_LOGICAL_NOT,
+    [STATE_EXCLAMATION_MARK_EQUALS] = TK_NOT_EQUAL,
+    [STATE_TILDE]                   = TK_BITWISE_NOT,
+    [STATE_HAT]                     = TK_BITWISE_XOR,
+    [STATE_HAT_EQUALS]              = TK_BITWISE_XOR_EQUAL,
+    [STATE_PERCENT]                 = TK_MODULO,
+    [STATE_PERCENT_EQUALS]          = TK_MODULO_EQUAL,
+    [STATE_EQUALS]                  = TK_ASSIGN,
+    [STATE_EQUALS_EQUALS]           = TK_EQUAL,
+    [STATE_LESSER]                  = TK_LESSER,
+    [STATE_GREATER]                 = TK_GREATER,
+    [STATE_LESSER_EQUALS]           = TK_LESSER_EQUAL,
+    [STATE_GREATER_EQUALS]          = TK_GREATER_EQUAL,
+    [STATE_SHIFT_LEFT]              = TK_SHIFT_LEFT,
+    [STATE_SHIFT_RIGHT]             = TK_SHIFT_RIGHT,
+    [STATE_SHIFT_LEFT_EQUALS]       = TK_SHIFT_LEFT_EQUAL,
+    [STATE_SHIFT_RIGHT_EQUALS]      = TK_SHIFT_RIGHT_EQUAL,
+    [STATE_DOT]                     = TK_PERIOD,
+    [STATE_QUESTION_MARK]           = TK_QUESTION_MARK,
+    [STATE_COLON]                   = TK_COLON,
+    [STATE_LINE_COMMENT]            = TK_INVALID,
+    [STATE_BLOCK_COMMENT]           = TK_INVALID,
+    [STATE_BLOCK_COMMENT_ASTERISK]  = TK_INVALID,
+    [STATE_COMMA]                   = TK_COMMA,
+    [STATE_OPEN_PARENTHESIS]        = TK_OPEN_PAREN,
+    [STATE_CLOSE_PARENTHESIS]       = TK_CLOSE_PAREN,
+    [STATE_OPEN_BRACKET]            = TK_OPEN_BRACKET,
+    [STATE_CLOSE_BRACKET]           = TK_CLOSE_BRACKET,
+    [STATE_OPEN_BRACE]              = TK_OPEN_BRACE,
+    [STATE_CLOSE_BRACE]             = TK_CLOSE_BRACE,
+    [STATE_SEMICOLON]               = TK_SEMICOLON,
+};
 
-    char c0 = input[pos];
-    char c1 = pos + 1 < size ? input[pos + 1] : 0;
-    char c2 = pos + 2 < size ? input[pos + 2] : 0;
+typedef DFAState DFATable[STATE_COUNT][128];
 
-    Token token = {
-        .type = TK_INVALID,
-        .literal = &input[pos],
-        .literalLength = 1,
-    };
+#define PUSH(table, state, _char, state2) ((table)[(state)][(_char)] = (state2))
 
-    switch (c0) {
-        case '<': {
-            if (c1 == '<' && c2 == '=') {
-                token.type = TK_SHIFT_LEFT_EQUAL;
-                token.literalLength = 3;
-            }
-            else if (c1 == '<') {
-                token.type = TK_SHIFT_LEFT;
-                token.literalLength = 2;
-            }
-            else if (c1 == '=') {
-                token.type = TK_LESSER_EQUAL;
-                token.literalLength = 2;
-            }
-            else {
-                token.type = TK_LESSER;
-            }
+#define NEUTRAL_STATE_COUNT 2
 
-            break;
+void GenerateDFATable(DFATable table) {
+    memset(table, 0, sizeof(DFATable));
+    DFAState neutral_states[NEUTRAL_STATE_COUNT] = {STATE_START, STATE_WHITESPACE};
+
+    for (uint8_t i = 0; i < NEUTRAL_STATE_COUNT; i++) {
+        for (uint8_t _char = 0; _char < 128; _char++) {
+            PUSH(table, STATE_STRING_LITERAL, _char, STATE_STRING_LITERAL);
+            PUSH(table, STATE_LINE_COMMENT, _char, STATE_LINE_COMMENT);
+            PUSH(table, STATE_BLOCK_COMMENT, _char, STATE_BLOCK_COMMENT);
+            PUSH(table, STATE_STRING_LITERAL_ESCAPE, _char, STATE_STRING_LITERAL);
+            PUSH(table, STATE_CHAR_LITERAL_ESCAPE, _char, STATE_CHAR_LITERAL);
+            PUSH(table, STATE_BLOCK_COMMENT_ASTERISK, _char, STATE_BLOCK_COMMENT);
+
+            if ((unsigned)((_char | 0x20) - 'a') < 26) {
+                PUSH(table, neutral_states[i], _char, STATE_IDENTIFIER);
+                PUSH(table, STATE_IDENTIFIER, _char, STATE_IDENTIFIER);
+            }
+            if (((unsigned)(_char - '0') <= 9)) {
+                PUSH(table, neutral_states[i], _char, STATE_INT_LITERAL);
+                PUSH(table, STATE_INT_LITERAL, _char, STATE_INT_LITERAL);
+                PUSH(table, STATE_FLOAT_LITERAL, _char, STATE_FLOAT_LITERAL);
+                PUSH(table, STATE_DOT, _char, STATE_FLOAT_LITERAL);
+            }
         }
-        case '>': {
-            if (c1 == '>' && c2 == '=') {
-                token.type = TK_SHIFT_RIGHT_EQUAL;
-                token.literalLength = 3;
-            }
-            else if (c1 == '>') {
-                token.type = TK_SHIFT_RIGHT;
-                token.literalLength = 2;
-            }
-            else if (c1 == '=') {
-                token.type = TK_GREATER_EQUAL;
-                token.literalLength = 2;
-            }
-            else {
-                token.type = TK_GREATER;
-            }
+
+        PUSH(table, neutral_states[i], '_', STATE_IDENTIFIER);
+        PUSH(table, STATE_IDENTIFIER, '_', STATE_IDENTIFIER);
+        PUSH(table, STATE_INT_LITERAL, '_', STATE_INT_LITERAL);
+        PUSH(table, STATE_FLOAT_LITERAL, '_', STATE_FLOAT_LITERAL);
             
-            break;
-        }
-        case '+': {
-            if (c1 == '+') {
-                token.type = TK_INCREMENT;
-                token.literalLength = 2;
-            }
-            else if (c1 == '=') {
-                token.type = TK_PLUS_EQUAL;
-                token.literalLength = 2;
-            }
-            else {
-                token.type = TK_PLUS;
-            }
-
-            break;
-        }
-        case '-': {
-            if (c1 == '-') {
-                token.type = TK_DECREMENT;
-                token.literalLength = 2;
-            }
-            else if (c1 == '=') {
-                token.type = TK_MINUS_EQUAL;
-                token.literalLength = 2;
-            }
-            else if (c1 == '>') {
-                token.type = TK_ARROW;
-                token.literalLength = 2;
-            }
-            else {
-                token.type = TK_MINUS;
-            }
-
-            break;
-        }
-        case '&': {
-            if (c1 == '&') {
-                token.type = TK_LOGICAL_AND;
-                token.literalLength = 2;
-            }
-            else if (c1 == '=') {
-                token.type = TK_BITWISE_AND_EQUAL;
-                token.literalLength = 2;
-            }
-            else {
-                token.type = TK_BITWISE_AND;
-            }
-
-            break;
-        }
-        case '|': {
-            if (c1 == '|') {
-                token.type = TK_LOGICAL_OR;
-                token.literalLength = 2;
-            }
-            else if (c1 == '=') {
-                token.type = TK_BITWISE_OR_EQUAL;
-                token.literalLength = 2;
-            }
-            else {
-                token.type = TK_BITWISE_OR;
-            }
-
-            break;
-        }
-        case '=': {
-            if (c1 == '=') {
-                token.type = TK_EQUAL;
-                token.literalLength = 2;
-            }
-            else {
-                token.type = TK_ASSIGN;
-            }
-
-            break;
-        }
-        case '*': {
-            if (c1 == '=') {
-                token.type = TK_MULT_EQUAL;
-                token.literalLength = 2;
-            }
-            else {
-                token.type = TK_ASTERISK;
-            }
-
-            break;
-        }
-        case '/': {
-            if (c1 == '=') {
-                token.type = TK_DIVIDE_EQUAL;
-                token.literalLength = 2;
-            }
-            else {
-                token.type = TK_SLASH;
-            }
-
-            break;
-        }
-        case '^': {
-            if (c1 == '=') {
-                token.type = TK_BITWISE_XOR_EQUAL;
-                token.literalLength = 2;
-            }
-            else {
-                token.type = TK_BITWISE_XOR;
-            }
-
-            break;
+        PUSH(table, STATE_INT_LITERAL, '.', STATE_FLOAT_LITERAL);
+        PUSH(table, neutral_states[i], '.', STATE_DOT);
             
-        }
-        case '%': {
-            if (c1 == '=') {
-                token.type = TK_MODULO_EQUAL;
-                token.literalLength = 2;
-            }
-            else {
-                token.type = TK_MODULO;
-            }
+        PUSH(table, neutral_states[i], '(', STATE_OPEN_PARENTHESIS);
+        PUSH(table, neutral_states[i], ')', STATE_CLOSE_PARENTHESIS);
+        PUSH(table, neutral_states[i], '[', STATE_OPEN_BRACKET);
+        PUSH(table, neutral_states[i], ']', STATE_CLOSE_BRACKET);
+        PUSH(table, neutral_states[i], '{', STATE_OPEN_BRACE);
+        PUSH(table, neutral_states[i], '}', STATE_CLOSE_BRACE);
+            
+        PUSH(table, neutral_states[i], '"', STATE_STRING_LITERAL);
+        PUSH(table, STATE_STRING_LITERAL, '"', STATE_STRING_LITERAL_END);
+        PUSH(table, STATE_STRING_LITERAL, '\\', STATE_STRING_LITERAL_ESCAPE);
+            
+        PUSH(table, neutral_states[i], '\'', STATE_CHAR_LITERAL);
+        PUSH(table, STATE_CHAR_LITERAL, '\'', STATE_CHAR_LITERAL_END);
+        PUSH(table, STATE_CHAR_LITERAL, '\\', STATE_CHAR_LITERAL_ESCAPE);
+        
+        PUSH(table, STATE_LINE_COMMENT, '\n', STATE_START);
 
-            break;
-        }
-        case '!': {
-            if (c1 == '=') {
-                token.type = TK_NOT_EQUAL;
-                token.literalLength = 2;
-            }
-            else {
-                token.type = TK_LOGICAL_NOT;
-            }
+        PUSH(table, STATE_BLOCK_COMMENT, '*', STATE_BLOCK_COMMENT_ASTERISK);
+        PUSH(table, STATE_BLOCK_COMMENT_ASTERISK, '*', STATE_BLOCK_COMMENT_ASTERISK);
+        PUSH(table, STATE_BLOCK_COMMENT_ASTERISK, '/', STATE_START);
 
-            break;
-        }
-        case '~': {
-            token.type = TK_BITWISE_NOT;
+        PUSH(table, neutral_states[i], '/', STATE_SLASH);
+        PUSH(table, STATE_SLASH, '=', STATE_SLASH_EQUALS);
+        PUSH(table, STATE_SLASH, '/', STATE_LINE_COMMENT);
+        PUSH(table, STATE_SLASH, '*', STATE_BLOCK_COMMENT);
 
-            break;
-        }
-        case '.': {
-            token.type = TK_PERIOD;
+        PUSH(table, neutral_states[i], ';', STATE_SEMICOLON);
+        PUSH(table, neutral_states[i], '<', STATE_LESSER);
+        PUSH(table, neutral_states[i], '>', STATE_GREATER);
+        PUSH(table, STATE_LESSER, '<', STATE_SHIFT_LEFT);
+        PUSH(table, STATE_GREATER, '>', STATE_SHIFT_RIGHT);
+        PUSH(table, STATE_LESSER, '=', STATE_LESSER_EQUALS);
+        PUSH(table, STATE_GREATER, '=', STATE_GREATER_EQUALS);
+        PUSH(table, STATE_SHIFT_LEFT, '=', STATE_SHIFT_LEFT_EQUALS);
+        PUSH(table, STATE_SHIFT_RIGHT, '=', STATE_SHIFT_RIGHT_EQUALS);
+        PUSH(table, neutral_states[i], '-', STATE_MINUS);
+        PUSH(table, STATE_MINUS, '-', STATE_MINUS_MINUS);
+        PUSH(table, STATE_MINUS, '=', STATE_MINUS_EQUALS);
+        PUSH(table, STATE_MINUS, '>', STATE_MINUS_GREATER);
+        PUSH(table, neutral_states[i], '+', STATE_PLUS);
+        PUSH(table, STATE_PLUS, '+', STATE_PLUS_PLUS);
+        PUSH(table, STATE_PLUS, '=', STATE_PLUS_EQUALS);
+        PUSH(table, neutral_states[i], '*', STATE_ASTERISK);
+        PUSH(table, STATE_ASTERISK, '=', STATE_ASTERISK_EQUALS);
+        PUSH(table, neutral_states[i], '&', STATE_AND);
+        PUSH(table, STATE_AND, '&', STATE_AND_AND);
+        PUSH(table, STATE_AND, '=', STATE_AND_EQUALS);
+        PUSH(table, neutral_states[i], '|', STATE_OR);
+        PUSH(table, STATE_OR, '|', STATE_OR_OR);
+        PUSH(table, STATE_OR, '=', STATE_OR_EQUALS);
+        PUSH(table, neutral_states[i], '%', STATE_PERCENT);
+        PUSH(table, STATE_PERCENT, '=', STATE_PERCENT_EQUALS);
+        PUSH(table, neutral_states[i], '^', STATE_HAT);
+        PUSH(table, STATE_HAT, '=', STATE_HAT_EQUALS);
+        PUSH(table, neutral_states[i], ',', STATE_COMMA);
+        PUSH(table, neutral_states[i], '=', STATE_EQUALS);
+        PUSH(table, STATE_EQUALS, '=', STATE_EQUALS_EQUALS);
+        PUSH(table, neutral_states[i], '!', STATE_EXCLAMATION_MARK);
+        PUSH(table, STATE_EXCLAMATION_MARK, '=', STATE_EXCLAMATION_MARK_EQUALS);
+        PUSH(table, neutral_states[i], ':', STATE_COLON);
+        PUSH(table, neutral_states[i], '~', STATE_TILDE);
+        PUSH(table, neutral_states[i], '?', STATE_QUESTION_MARK);
 
-            break;
-        }
-        case '?': {
-            token.type = TK_QUESTION_MARK;
+        PUSH(table, neutral_states[i], ' ', STATE_WHITESPACE);
+        PUSH(table, neutral_states[i], '\t', STATE_WHITESPACE);
+        PUSH(table, neutral_states[i], '\r', STATE_WHITESPACE);
+        PUSH(table, neutral_states[i], '\n', STATE_WHITESPACE);
 
-            break;
-        }
-        case ':': {
-            token.type = TK_COLON;
-
-            break;
-        }
+        // to remove
+        PUSH(table, neutral_states[i], '#', STATE_START);
+        PUSH(table, neutral_states[i], '\\', STATE_START);
     }
-
-    *i += token.literalLength;
-
-    return token;
 }
 
-static const unsigned char PunctuatorTokenTypeLookup[256] = {
-    [','] = TK_COMMA,
-    ['('] = TK_OPEN_PAREN,
-    [')'] = TK_CLOSE_PAREN,
-    ['['] = TK_OPEN_BRACKET,
-    [']'] = TK_CLOSE_BRACKET,
-    ['{'] = TK_OPEN_BRACE,
-    ['}'] = TK_CLOSE_BRACE,
-    [';'] = TK_SEMICOLON,
-};
-
-static inline Token CreatePunctuatorToken(char* input) {
-    TokenType type = PunctuatorTokenTypeLookup[*input];
-
-    Token token = {
-        .type = type,
-        .literal = input,
-        .literalLength = 1,
-    };
-
-    return token;
-}
-
-static inline bool IsAlpha(char input) {
-    return ((input | 0x20) - 'a') < 26 || input == '_';
-}
-
-static inline bool IsAlphaNumeric(char input) {
-    return ((input | 0x20) - 'a') < 26 || ((unsigned)(input - '0') <= 9);
-}
-
-static inline bool IsNumeric(char input) {
-    return ((unsigned)(input - '0') <= 9) || input == '.' || input == '_';
-}
-
-static const unsigned char IsOperatorLookup[256] = {
-    ['+'] = true,
-    ['-'] = true,
-    ['*'] = true,
-    ['/'] = true,
-    ['&'] = true,
-    ['|'] = true,
-    ['~'] = true,
-    ['!'] = true,
-    ['^'] = true,
-    ['%'] = true,
-    ['='] = true,
-    ['<'] = true,
-    ['>'] = true,
-    ['.'] = true,
-    ['?'] = true,
-    [':'] = true,
-};
-
-static inline bool IsOperator(char input) {
-    return IsOperatorLookup[input];
-}
-
-static const unsigned char IsPunctuatorLookup[256] = {
-    [','] = true,
-    ['('] = true,
-    [')'] = true,
-    ['['] = true,
-    [']'] = true,
-    ['{'] = true,
-    ['}'] = true,
-    [';'] = true,
-};
-
-static inline bool IsPunctuator(char input) {
-    return IsPunctuatorLookup[input];
-}
-
-static inline void IncrementTokenCount(uint64_t* tokenCount, uint64_t* tokenCapacity, Token** tokens) {
-    (*tokenCount)++;
-
+static inline Token* PushToken(Token* tokens, uint64_t* tokenCount, uint64_t* tokenCapacity, Token token) {
     if (*tokenCount >= *tokenCapacity) {
         *tokenCapacity *= 2;
-        *tokens = realloc(*tokens, *tokenCapacity * sizeof(Token));
-    }
-}
+        tokens = realloc(tokens, *tokenCapacity * sizeof(Token));
 
-Token* Tokenize(char* data, uint64_t dataSize, uint64_t* tokenCount) {
-    Token currentToken;
-
-    uint64_t tokenStart = 0;
-    uint64_t i = 0;
-    uint64_t lineStartI = 0;
-    uint64_t line = 0;
-    uint64_t tokenCapacity = dataSize > 16 ? dataSize / 16 : 1;
-
-    Token* tokens = malloc(tokenCapacity * sizeof(Token));
-
-    while (true) {
-        if (i >= dataSize) {
-            tokens[*tokenCount].type = TK_EOF;
-            break;
-        }
-        else if (data[i] == '\n') {
-            line++;
-            lineStartI = i;
-            i++;
-        }
-        else if (data[i] == '\"') {
-            tokenStart = i;
-            i++;
-
-            while (i < dataSize && data[i] != '\"' && data[i - 1] != '\\') {
-                i++;
-            }
-
-            i++;
-
-            currentToken.literal = &data[tokenStart];
-            currentToken.literalLength = i - tokenStart;
-            currentToken.type = TK_STRING_LITERAL;
-            currentToken.line = line;
-            currentToken.column = tokenStart - lineStartI;
-
-            tokens[*tokenCount] = currentToken;
-            IncrementTokenCount(tokenCount, &tokenCapacity, &tokens);
-        }
-        else if (data[i] == '\'') {
-            tokenStart = i;
-            i++;
-
-            while (i < dataSize && data[i] != '\'' && data[i - 1] != '\\') i++;
-
-            i++;
-
-            currentToken.literal = &data[tokenStart];
-            currentToken.literalLength = i - tokenStart;
-            currentToken.type = TK_CHAR_LITERAL;
-            currentToken.line = line;
-            currentToken.column = tokenStart - lineStartI;
-
-            tokens[*tokenCount] = currentToken;
-            IncrementTokenCount(tokenCount, &tokenCapacity, &tokens);
-        }
-        else if (data[i] == '/' && data[i + 1] == '/') {
-            i += 2;
-
-            while (i < dataSize && data[i] != '\n') i++;
-        }
-        else if (data[i] == '/' && data[i + 1] == '*') {
-            i += 2;
-
-            while (i < dataSize && data[i] != '*' && data[i + 1] != '/') i++;
-
-            if (i < dataSize) i += 2;
-        }
-        else if (IsAlpha(data[i])) {
-            tokenStart = i;
-            i++;
-
-            while (i < dataSize && IsAlphaNumeric(data[i])) i++;
-
-            currentToken = CreateKeywordToken(&data[tokenStart], i - tokenStart);
-            currentToken.line = line;
-            currentToken.column = tokenStart - lineStartI;
-
-            tokens[*tokenCount] = currentToken;
-            IncrementTokenCount(tokenCount, &tokenCapacity, &tokens);
-        }
-        else if (IsNumeric(data[i])) {
-            tokenStart = i;
-            i++;
-
-            bool isFloat = data[tokenStart] == '.';
-
-            while (i < dataSize && data[i]) {
-                if (data[i] == '.') isFloat = true;
-                i++;
-            }
-
-            currentToken.type = isFloat ? TK_FLOAT_LITERAL : TK_INT_LITERAL;
-            currentToken.literal = &data[tokenStart];
-            currentToken.literalLength = i - tokenStart;
-            currentToken.line = line;
-            currentToken.column = tokenStart - lineStartI;
-
-            tokens[*tokenCount] = currentToken;
-            IncrementTokenCount(tokenCount, &tokenCapacity, &tokens);
-        }
-        else if (IsOperator(data[i])) {
-            tokenStart = i;
-
-            currentToken = CreateOperatorToken(data, dataSize, &i);
-            currentToken.line = line;
-            currentToken.column = tokenStart - lineStartI;
-
-            tokens[*tokenCount] = currentToken;
-            IncrementTokenCount(tokenCount, &tokenCapacity, &tokens);
-        }
-        else if (IsPunctuator(data[i])) {
-            tokenStart = i;
-            i++;
-
-            currentToken = CreatePunctuatorToken(&data[tokenStart]);
-            currentToken.line = line;
-            currentToken.column = tokenStart - lineStartI;
-
-            tokens[*tokenCount] = currentToken;
-            IncrementTokenCount(tokenCount, &tokenCapacity, &tokens);
-        }
-        else {
-            i++;
+        if (!tokens) {
+            printf("[ERROR] Failed to reallocate %zu bytes for tokens\n", *tokenCapacity * sizeof(Token));
+            return NULL;
         }
     }
 
+    tokens[*tokenCount] = token;
     (*tokenCount)++;
 
     return tokens;
+}
+
+Token* Tokenize(char* data, uint64_t dataSize, DFATable table, uint64_t* tokenCount) {
+    uint64_t tokenCapacity = *tokenCount > 0 ? *tokenCount : 64;
+    *tokenCount = 0;
+
+    Token* tokens = malloc(tokenCapacity * sizeof(Token));
+
+    DFAState state = STATE_START;
+
+    uint64_t lastCanEmitPos = 0;
+    DFAState lastCanEmitState = STATE_NONE;
+
+    uint64_t tokenStart = 0;
+
+    for (uint64_t i = 0; i < dataSize; i++) {
+        DFAState next = table[state][(unsigned char)data[i]];
+
+        if (next) {
+            if (next == STATE_WHITESPACE) tokenStart = i;
+
+            state = next;
+
+            if (DFAStateToTokenTypeLookup[next]) {
+                lastCanEmitState = next;
+                lastCanEmitPos = i;
+            }
+
+            continue;
+        }
+
+        if (lastCanEmitState) {
+            char* literal = &data[tokenStart];
+            uint64_t literalLength = lastCanEmitPos - tokenStart + 1;
+
+            Token token = {
+                .type = DFAStateToTokenTypeLookup[lastCanEmitState],
+                .literal = literal,
+                .literalLength = literalLength,
+                .line = 0,
+                .column = 0,
+            };
+
+            if (token.type == TK_IDENTIFIER) token.type = GetKeyword(token.literal, token.literalLength);
+
+            tokens = PushToken(tokens, tokenCount, &tokenCapacity, token);
+            if (!tokens) return NULL;
+
+            i = lastCanEmitPos;
+            state = STATE_START;
+            lastCanEmitPos = 0;
+            lastCanEmitState = STATE_NONE;
+            tokenStart = i + 1;
+
+            continue;
+        }
+        
+        printf("yikes at #%li (%c), state = %i\n", i, data[i], state);
+        free(tokens);
+        return NULL;
+    }
+
+    if (state == STATE_BLOCK_COMMENT || state == STATE_BLOCK_COMMENT_ASTERISK || state == STATE_STRING_LITERAL || state == STATE_CHAR_LITERAL
+        || state == STATE_STRING_LITERAL_ESCAPE || state == STATE_CHAR_LITERAL_ESCAPE) {
+        printf("[ERROR] Unexpected EOF, state = %i\n", state);
+        free(tokens);
+        return NULL;
+    }
+
+    if (lastCanEmitState) {
+        char* literal = &data[tokenStart];
+        uint64_t literalLength = lastCanEmitPos - tokenStart + 1;
+
+        Token token = {
+            .type = DFAStateToTokenTypeLookup[lastCanEmitState],
+            .literal = literal,
+            .literalLength = literalLength,
+            .line = 0,
+            .column = 0,
+        };
+
+        if (token.type == TK_IDENTIFIER) token.type = GetKeyword(token.literal, token.literalLength);
+
+        tokens = PushToken(tokens, tokenCount, &tokenCapacity, token);
+        if (!tokens) return NULL;
+    }
+
+    Token token = {
+        .type = TK_EOF,
+        .literal = &data[dataSize],
+        .literalLength = 0,
+        .line = 0,
+        .column = 0,
+    };
+
+    tokens = PushToken(tokens, tokenCount, &tokenCapacity, token);
+    if (!tokens) return NULL;
+
+    return tokens;
+}
+
+uint64_t str_to_int(const char* str) {
+    uint64_t out = 0;
+
+    for (; *str != '\0'; str++) {
+        unsigned int digit = (unsigned int)(*str - '0');
+
+        if (digit > 9) {
+            return UINT64_MAX;
+        }
+
+        if (out > (UINT64_MAX - digit) / 10) {
+            return UINT64_MAX;
+        }
+
+        out = out * 10 + digit;
+    }
+
+    return out;
 }
 
 int main(int argc, char** argv) {
@@ -609,8 +566,8 @@ int main(int argc, char** argv) {
     strcat(path, "/");
     strcat(path, argv[1]);
 
-    uint64_t size;
-    char* data = OpenFile(path, &size);
+    uint64_t dataSize;
+    char* data = OpenFile(path, &dataSize);
 
     if (!data) {
         printf("[ERROR] Invalid input file: \"%s\"\n", path);
@@ -620,29 +577,46 @@ int main(int argc, char** argv) {
 
     free(path);
 
-    uint64_t tokenCount = 0;
+    DFATable table;
+    GenerateDFATable(table);
 
+    uint64_t tokenCount = 0;
     Token* tokens;
-    uint32_t n = 1024;
+
+    uint64_t n = argc >= 3 ? str_to_int(argv[2]) : 1;
+
+    if (n == UINT64_MAX) {
+        printf("[ERROR] Not a number\n");
+        free(data);
+        return 1;
+    }
+    if (n == 0) {
+        printf("[ERROR] N cannot be 0\n");
+        free(data);
+        return 1;
+    }
+
+    clock_t start = clock();
 
     for (uint32_t i = 0; i < n; i++) {
         tokenCount = 0;
-        tokens = Tokenize(data, size, &tokenCount);
+        tokens = Tokenize(data, dataSize, table, &tokenCount);
         if (i < n - 1) free(tokens);
     }
 
+    clock_t end = clock();
+
     free(data);
 
-    if (tokens == NULL) {
+    if (!tokens) {
         printf("tokenization error\n");
         return -1;
     }
 
-    for (uint32_t i = 0; i < tokenCount - 1; i++) {
-        //printf("%.*s\n", tokens[i].literalLength, tokens[i].literal);
-    }
+    double time = (double)(end - start) / CLOCKS_PER_SEC;
 
     free(tokens);
-    printf("\n\n\nsize=%li bytes\ntokens=%li\n", size, tokenCount);
+    printf("\n\n\nsize=%li bytes\ntokens=%li\n", dataSize, tokenCount);
+    printf("speed=%lumb/s\n", (unsigned long)((dataSize * n) / time / 1024 / 1024));
     return 0;
 }

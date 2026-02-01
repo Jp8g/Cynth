@@ -6,5 +6,5 @@ C_DEFINES =
 
 C_INCLUDES = 
 
-C_FLAGS = -std=gnu99 -O0
+C_FLAGS =  -mavx512f -mavx512bw -std=gnu99 -flto=auto -fno-fat-lto-objects -O3
 

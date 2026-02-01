@@ -1,1 +1,1 @@
-/usr/bin/cc -Wl,--dependency-file=CMakeFiles/cynth.dir/link.d CMakeFiles/cynth.dir/src/main.c.o -o cynth
+/usr/bin/cc  -mavx512f -mavx512bw -flto=auto -fno-fat-lto-objects  -Wl,--gc-sections -Wl,--dependency-file=CMakeFiles/cynth.dir/link.d CMakeFiles/cynth.dir/src/main.c.o -o cynth  -lm
