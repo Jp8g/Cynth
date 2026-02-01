@@ -1,3 +1,0 @@
-/home/hezzy/Projects/Cynth/build/CMakeFiles/cynth.dir
-/home/hezzy/Projects/Cynth/build/CMakeFiles/edit_cache.dir
-/home/hezzy/Projects/Cynth/build/CMakeFiles/rebuild_cache.dir
